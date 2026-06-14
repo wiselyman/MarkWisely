@@ -1,0 +1,86 @@
+name: Platform Installer Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Smoke ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-x64
+            platform: macos-15-intel
+            target: x86_64-apple-darwin
+            build_args: --target x86_64-apple-darwin
+          - name: macos-arm64
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            build_args: --target aarch64-apple-darwin
+          - name: windows-x64
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            build_args: --target x86_64-pc-windows-msvc
+          - name: windows-arm64
+            platform: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            build_args: --target aarch64-pc-windows-msvc
+          - name: linux-x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            build_args: --target x86_64-unknown-linux-gnu --bundles deb,rpm
+          - name: linux-arm64
+            platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            build_args: --target aarch64-unknown-linux-gnu --bundles deb,rpm
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build installer bundles
+        run: npm run tauri -- build ${{ matrix.build_args }}
+      - name: macOS bundle smoke
+        if: startsWith(matrix.name, 'macos-')
+        run: |
+          set -euo pipefail
+          test -d "src-tauri/target/${{ matrix.target }}/release/bundle/macos/MarkWisely.app"
+          test -f src-tauri/target/${{ matrix.target }}/release/bundle/dmg/MarkWisely_*.dmg
+          codesign --verify --deep --strict "src-tauri/target/${{ matrix.target }}/release/bundle/macos/MarkWisely.app" || true
+      - name: Windows installer smoke
+        if: startsWith(matrix.name, 'windows-')
+        shell: pwsh
+        run: |
+          $bundles = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle" -Recurse -Include *.msi,*.exe
+          if (-not $bundles) { throw "No Windows installer bundles were generated." }
+          $bundles | ForEach-Object { Write-Host $_.FullName }
+      - name: Linux installer smoke
+        if: startsWith(matrix.name, 'linux-')
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle"
+          deb="$(find "$bundle_dir" -name '*.deb' -print -quit)"
+          rpm="$(find "$bundle_dir" -name '*.rpm' -print -quit)"
+          test -n "$deb"
+          test -n "$rpm"
+          sudo apt-get install -y "./$deb"
+          command -v markwisely || find /usr -iname '*markwisely*' -print -quit
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-smoke-${{ matrix.name }}
+          path: src-tauri/target/**/bundle/**

@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and publish.
+        required: true
+        default: v0.1.0
+        type: string
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npm run tauri -- build --debug --bundles deb,rpm
+      - run: npm run bundle:size
+
+  release:
+    name: Build ${{ matrix.name }}
+    needs: checks
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-x64
+            platform: macos-15-intel
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+          - name: macos-arm64
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - name: windows-x64
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
+          - name: windows-arm64
+            platform: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            args: --target aarch64-pc-windows-msvc
+          - name: linux-x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles deb,rpm
+          - name: linux-arm64
+            platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            args: --target aarch64-unknown-linux-gnu --bundles deb,rpm
+    runs-on: ${{ matrix.platform }}
+    env:
+      UPDATER_ARGS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: MarkWisely ${{ env.RELEASE_TAG }}
+          releaseBody: |
+            MarkWisely is a focused desktop Markdown editor for writers, developers, and note takers who want a clean local writing surface.
+
+            Highlights in this first release:
+            - Live WYSIWYG Markdown editing with plain Markdown files as the source of truth.
+            - Native desktop file workflow with new/open/save/save as, recent files, dirty-state titles, and external-change checks.
+            - Optional file tree, article list, recent files, outline, search/replace, source code mode, focus mode, and typewriter mode.
+            - Markdown tables, task lists, links, images, code blocks, math, diagrams, front matter, and table-of-contents blocks.
+            - Built-in HTML and structured PDF export, plus optional Pandoc-backed DOCX, EPUB, LaTeX, OpenDocument, and MediaWiki export.
+            - Local diagnostics logs and secure in-app update plumbing.
+            - MIT licensed.
+
+            Release assets are built for macOS, Windows, and Linux, with x64 and arm64 targets. Linux packages include both deb and rpm builds.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }} ${{ env.UPDATER_ARGS }}
+          uploadUpdaterJson: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          uploadUpdaterSignatures: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: MarkWisely-${{ env.RELEASE_TAG }}-${{ matrix.name }}
+      - name: Record bundle sizes
+        if: always()
+        run: npm run bundle:size
+      - name: Upload bundle size report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-size-${{ matrix.name }}
+          path: BUNDLE_SIZE_REPORT.md

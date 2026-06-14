@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="MarkWisely icon">
+  <rect x="56" y="56" width="912" height="912" rx="228" fill="#fbfaf7"/>
+  <rect x="60" y="60" width="904" height="904" rx="226" fill="none" stroke="#dedbd2" stroke-width="22"/>
+  <path d="M286 690V344L512 584L738 344V690" fill="none" stroke="#24272a" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M286 344L512 584L738 344" fill="none" stroke="#24272a" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" opacity=".14"/>
+</svg>

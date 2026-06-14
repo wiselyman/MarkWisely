@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MarkWisely",
+  "version": "0.1.0",
+  "identifier": "com.markwisely.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MarkWisely",
+        "label": "main",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "MarkWisely",
+    "homepage": "https://github.com/wiselyman/MarkWisely",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 MarkWisely",
+    "category": "Productivity",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "shortDescription": "A focused desktop Markdown editor.",
+    "longDescription": "MarkWisely is a cross-platform desktop Markdown editor built with Tauri."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxMzFGRTJGQ0JFMDA5MzUKUldRMUNlRExMLzR4MFJjOXg5YW5IMy9mWlhOdUlMMXBIS3BLMUFOSWJseEp3enJHdk9rcTY4dkIK",
+      "endpoints": [
+        "https://github.com/wiselyman/MarkWisely/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
