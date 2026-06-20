@@ -41,7 +41,18 @@
       "icons/icon.ico"
     ],
     "shortDescription": "A focused desktop Markdown editor.",
-    "longDescription": "MarkWisely is a cross-platform desktop Markdown editor built with Tauri."
+    "longDescription": "MarkWisely is a cross-platform desktop Markdown editor built with Tauri.",
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown", "mdown", "mkd"],
+        "name": "Markdown Document",
+        "description": "Markdown document",
+        "role": "Editor",
+        "mimeType": "text/markdown",
+        "rank": "Default",
+        "contentTypes": ["net.daringfireball.markdown", "public.markdown"]
+      }
+    ]
   },
   "plugins": {
     "updater": {

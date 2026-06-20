@@ -68,8 +68,10 @@ jobs:
         run: |
           set -euo pipefail
           app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/MarkWisely.app"
+          test_doc="$RUNNER_TEMP/markwisely-open-smoke.md"
+          printf '# Association Smoke\n\nOpened from argv.\n' > "$test_doc"
           test -d "$app_path"
-          open -n "$app_path"
+          open -n "$app_path" --args "$test_doc"
 
           pid=""
           for _ in $(seq 1 30); do
@@ -101,8 +103,10 @@ jobs:
           if (-not (Test-Path $exe)) {
             throw "Missing MarkWisely executable at $exe"
           }
+          $doc = Join-Path $env:RUNNER_TEMP "markwisely-open-smoke.md"
+          Set-Content -Path $doc -Value "# Association Smoke`n`nOpened from argv."
 
-          $process = Start-Process -FilePath $exe -PassThru
+          $process = Start-Process -FilePath $exe -ArgumentList @($doc) -PassThru
           try {
             $hasWindow = $false
             for ($i = 0; $i -lt 45; $i++) {
@@ -137,10 +141,12 @@ jobs:
         run: |
           set -euo pipefail
           app_path="src-tauri/target/${{ matrix.target }}/release/markwisely"
+          test_doc="$RUNNER_TEMP/markwisely-open-smoke.md"
+          printf '# Association Smoke\n\nOpened from argv.\n' > "$test_doc"
           test -x "$app_path"
-          APP_PATH="$app_path" xvfb-run -a bash <<'EOF'
+          APP_PATH="$app_path" DOC_PATH="$test_doc" xvfb-run -a bash <<'EOF'
           set -euo pipefail
-          "$APP_PATH" &
+          "$APP_PATH" "$DOC_PATH" &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
 
@@ -179,6 +185,7 @@ jobs:
           set -euo pipefail
           test -d "src-tauri/target/${{ matrix.target }}/release/bundle/macos/MarkWisely.app"
           test -f src-tauri/target/${{ matrix.target }}/release/bundle/dmg/MarkWisely_*.dmg
+          /usr/libexec/PlistBuddy -c "Print :CFBundleDocumentTypes" "src-tauri/target/${{ matrix.target }}/release/bundle/macos/MarkWisely.app/Contents/Info.plist" | grep -E 'md|markdown|text/markdown'
           codesign --verify --deep --strict "src-tauri/target/${{ matrix.target }}/release/bundle/macos/MarkWisely.app" || true
       - name: Windows installer smoke
         if: startsWith(matrix.name, 'windows-')
@@ -202,6 +209,9 @@ jobs:
             installed="$(find /usr -iname '*markwisely*' -type f -perm -111 -print -quit)"
           fi
           test -n "$installed"
+          desktop_file="$(find /usr/share/applications -iname '*markwisely*.desktop' -print -quit)"
+          test -n "$desktop_file"
+          grep -q 'MimeType=.*text/markdown' "$desktop_file"
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:

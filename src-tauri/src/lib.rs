@@ -2,6 +2,7 @@ mod commands;
 mod documents;
 mod export;
 mod menu;
+mod open_files;
 
 use tauri::Manager;
 use tauri_plugin_log::{Target, TargetKind};
@@ -23,7 +24,9 @@ pub fn run() {
         )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let paths = open_files::collect_markdown_paths_from_args(args, cwd);
+            open_files::queue_open_paths(app, paths);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
             }
@@ -52,15 +55,30 @@ pub fn run() {
             commands::export_pdf_typst,
             commands::detect_pandoc,
             commands::export_with_pandoc,
-            commands::app_log_dir
+            commands::app_log_dir,
+            commands::take_pending_open_paths
         ])
         .setup(|app| {
             log::info!("MarkWisely started");
+            let initial_paths = open_files::collect_markdown_paths_from_args(
+                std::env::args().collect(),
+                std::env::current_dir().unwrap_or_default(),
+            );
+            app.manage(open_files::PendingOpenPaths::new(initial_paths));
             menu::install(app)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running MarkWisely");
+        .build(tauri::generate_context!())
+        .expect("error while building MarkWisely")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = event {
+                let paths = open_files::collect_markdown_paths_from_urls(urls);
+                open_files::queue_open_paths(app, paths);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 fn install_panic_logging() {

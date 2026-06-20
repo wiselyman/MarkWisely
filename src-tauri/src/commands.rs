@@ -10,6 +10,7 @@ use crate::export::{
     detect_pandoc as detect_pandoc_binary, write_html_export, write_pandoc_export,
     write_pdf_typst_export,
 };
+use crate::open_files::PendingOpenPaths;
 use tauri::Manager;
 
 #[tauri::command]
@@ -169,4 +170,9 @@ pub fn app_log_dir(app: tauri::AppHandle) -> Result<String, String> {
         .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn take_pending_open_paths(pending: tauri::State<'_, PendingOpenPaths>) -> Vec<String> {
+    pending.take()
 }

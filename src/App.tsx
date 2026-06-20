@@ -25,6 +25,7 @@ import {
   moveImageTo,
   readDocument,
   savePastedImage,
+  takePendingOpenPaths,
   writeDocument,
 } from './lib/tauri';
 import {
@@ -327,6 +328,49 @@ function App() {
     },
     [confirmDiscardChanges, openPayload],
   );
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const openFirstPath = (paths: string[]) => {
+      const path = paths.find((candidate) => typeof candidate === 'string' && candidate.length > 0);
+      if (path) {
+        void openFilePath(path);
+      }
+    };
+
+    void takePendingOpenPaths()
+      .then((paths) => {
+        if (!disposed) {
+          openFirstPath(paths);
+        }
+      })
+      .catch(() => undefined);
+
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<string[]>('markwisely-open-paths', (event) => {
+          openFirstPath(event.payload);
+        }),
+      )
+      .then((dispose) => {
+        if (disposed) {
+          dispose();
+        } else {
+          unlisten = dispose;
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [openFilePath]);
 
   const openFileDialog = useCallback(async () => {
     try {

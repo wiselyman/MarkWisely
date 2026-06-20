@@ -50,6 +50,10 @@ export async function readDocument(path: string): Promise<DocumentPayload> {
   return invoke<DocumentPayload>('read_document', { path });
 }
 
+export async function takePendingOpenPaths(): Promise<string[]> {
+  return invoke<string[]>('take_pending_open_paths');
+}
+
 export async function documentMetadata(path: string): Promise<DocumentMetadata> {
   return invoke<DocumentMetadata>('document_metadata', { path });
 }
