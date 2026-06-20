@@ -171,6 +171,7 @@ jobs:
           pid=$!
 
           window_id=""
+          window_ids=""
           close_tool=""
           wmctrl_windows=""
           for _ in $(seq 1 45); do
@@ -185,10 +186,12 @@ jobs:
               window_id="$(printf '%s\n' "$wmctrl_windows" | awk 'tolower($0) ~ /markwisely/ { print $1; exit }')"
             fi
             if [ -n "$window_id" ]; then
+              window_ids="$window_id"
               close_tool="wmctrl"
               break
             fi
-            window_id="$(xdotool search --pid "$pid" 2>/dev/null | head -n 1 || true)"
+            window_ids="$(xdotool search --pid "$pid" 2>/dev/null || true)"
+            window_id="$(printf '%s\n' "$window_ids" | tail -n 1)"
             if [ -n "$window_id" ]; then
               close_tool="xdotool"
               break
@@ -197,13 +200,23 @@ jobs:
           done
           test -n "$window_id"
           printf '%s\n' "$wmctrl_windows"
+          if [ "$close_tool" = "xdotool" ]; then
+            printf '%s\n' "$window_ids" | while read -r candidate; do
+              [ -n "$candidate" ] || continue
+              name="$(xdotool getwindowname "$candidate" 2>/dev/null || true)"
+              echo "xdotool candidate $candidate $name"
+            done
+          fi
 
           if [ "$close_tool" = "wmctrl" ]; then
             wmctrl -ia "$window_id" || true
             wmctrl -ic "$window_id"
           else
-            xdotool windowactivate "$window_id" || true
-            xdotool windowclose "$window_id"
+            for candidate in $window_ids; do
+              xdotool windowactivate "$candidate" || true
+              xdotool windowclose "$candidate" || true
+            done
+            xdotool key Alt+F4 || true
           fi
           for _ in $(seq 1 20); do
             if ! kill -0 "$pid" 2>/dev/null; then
