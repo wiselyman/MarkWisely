@@ -214,8 +214,11 @@ jobs:
           else
             for candidate in $window_ids; do
               xdotool windowactivate "$candidate" || true
+              xdotool key --window "$candidate" ctrl+q || true
+              xdotool key --window "$candidate" Alt+F4 || true
               xdotool windowclose "$candidate" || true
             done
+            xdotool key ctrl+q || true
             xdotool key Alt+F4 || true
           fi
           for _ in $(seq 1 20); do
