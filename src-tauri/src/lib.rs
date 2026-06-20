@@ -1,6 +1,8 @@
 mod commands;
 mod documents;
 mod export;
+#[cfg(target_os = "macos")]
+mod macos_open_files;
 mod menu;
 mod open_files;
 
@@ -65,6 +67,8 @@ pub fn run() {
                 std::env::current_dir().unwrap_or_default(),
             );
             app.manage(open_files::PendingOpenPaths::new(initial_paths));
+            #[cfg(target_os = "macos")]
+            macos_open_files::install(app.handle());
             menu::install(app)?;
             Ok(())
         })
@@ -76,8 +80,13 @@ pub fn run() {
                 let paths = open_files::collect_markdown_paths_from_urls(urls);
                 open_files::queue_open_paths(app, paths);
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
+
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = event {
+                if label == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                    app.exit(0);
+                }
+            }
         });
 }
 

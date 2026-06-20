@@ -336,19 +336,46 @@ function App() {
 
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    let pollTimer: number | null = null;
+    let pollAttempts = 0;
+    const seenPaths = new Set<string>();
     const openFirstPath = (paths: string[]) => {
-      const path = paths.find((candidate) => typeof candidate === 'string' && candidate.length > 0);
+      const path = paths.find(
+        (candidate) =>
+          typeof candidate === 'string' && candidate.length > 0 && !seenPaths.has(candidate),
+      );
       if (path) {
+        seenPaths.add(path);
         void openFilePath(path);
+        return true;
       }
+      return false;
     };
 
-    void takePendingOpenPaths()
-      .then((paths) => {
-        if (!disposed) {
-          openFirstPath(paths);
-        }
-      })
+    const pollPendingOpenPaths = () => {
+      void takePendingOpenPaths()
+        .then((paths) => {
+          if (disposed) {
+            return;
+          }
+          const opened = openFirstPath(paths);
+          pollAttempts += 1;
+          if (!opened && pollAttempts < 24) {
+            pollTimer = window.setTimeout(pollPendingOpenPaths, 250);
+          }
+        })
+        .catch(() => {
+          if (!disposed && pollAttempts < 24) {
+            pollAttempts += 1;
+            pollTimer = window.setTimeout(pollPendingOpenPaths, 250);
+          }
+        });
+    };
+
+    pollPendingOpenPaths();
+
+    void import('@tauri-apps/plugin-log')
+      .then(({ info }) => info('MarkWisely open-file listener ready'))
       .catch(() => undefined);
 
     void import('@tauri-apps/api/event')
@@ -368,6 +395,9 @@ function App() {
 
     return () => {
       disposed = true;
+      if (pollTimer !== null) {
+        window.clearTimeout(pollTimer);
+      }
       unlisten?.();
     };
   }, [openFilePath]);

@@ -3219,6 +3219,8 @@ dependencies = [
  "comrak",
  "html-escape",
  "log",
+ "objc2",
+ "objc2-foundation",
  "regex",
  "serde",
  "serde_json",

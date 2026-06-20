@@ -8,6 +8,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, Url};
 
 pub const OPEN_PATHS_EVENT: &str = "markwisely-open-paths";
 
+static EARLY_OPEN_PATHS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 #[derive(Default)]
 pub struct PendingOpenPaths {
     paths: Mutex<Vec<String>>,
@@ -15,6 +17,9 @@ pub struct PendingOpenPaths {
 
 impl PendingOpenPaths {
     pub fn new(paths: Vec<String>) -> Self {
+        let mut paths = paths;
+        paths.extend(take_early_open_paths());
+        dedupe(&mut paths);
         Self {
             paths: Mutex::new(paths),
         }
@@ -48,6 +53,16 @@ pub fn collect_markdown_paths_from_args(args: Vec<String>, cwd: impl AsRef<Path>
     paths
 }
 
+pub fn collect_markdown_paths_from_file_names(file_names: Vec<String>) -> Vec<String> {
+    let mut paths = file_names
+        .into_iter()
+        .filter_map(|file_name| normalize_existing_markdown_path(PathBuf::from(file_name)))
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    dedupe(&mut paths);
+    paths
+}
+
 #[cfg(target_os = "macos")]
 pub fn collect_markdown_paths_from_urls(urls: Vec<Url>) -> Vec<String> {
     let mut paths = urls
@@ -70,8 +85,12 @@ pub fn queue_open_paths<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
         return;
     }
 
+    log::info!("Queueing markdown document open request: {paths:?}");
+
     if let Some(pending) = app.try_state::<PendingOpenPaths>() {
         pending.push_many(paths.clone());
+    } else {
+        push_early_open_paths(paths.clone());
     }
 
     let _ = app.emit(OPEN_PATHS_EVENT, &paths);
@@ -126,6 +145,21 @@ fn dedupe(paths: &mut Vec<String>) {
     paths.retain(|path| seen.insert(path.clone()));
 }
 
+fn push_early_open_paths(paths: Vec<String>) {
+    let mut pending = EARLY_OPEN_PATHS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    pending.extend(paths);
+    dedupe(&mut pending);
+}
+
+fn take_early_open_paths() -> Vec<String> {
+    let mut pending = EARLY_OPEN_PATHS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    std::mem::take(&mut *pending)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +194,22 @@ mod tests {
 
         let paths =
             collect_markdown_paths_from_args(vec!["markwisely".into(), "draft.markdown".into()], dir.path());
+
+        assert_eq!(paths, vec![markdown.canonicalize().unwrap().to_string_lossy()]);
+    }
+
+    #[test]
+    fn collects_existing_markdown_paths_from_file_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let markdown = dir.path().join("open.mdown");
+        let ignored = dir.path().join("open.txt");
+        fs::write(&markdown, "# Open").unwrap();
+        fs::write(&ignored, "ignored").unwrap();
+
+        let paths = collect_markdown_paths_from_file_names(vec![
+            markdown.to_string_lossy().to_string(),
+            ignored.to_string_lossy().to_string(),
+        ]);
 
         assert_eq!(paths, vec![markdown.canonicalize().unwrap().to_string_lossy()]);
     }
