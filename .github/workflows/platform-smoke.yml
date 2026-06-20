@@ -231,7 +231,19 @@ jobs:
           done
 
           ps -p "$pid" -o pid=,command= || true
-          echo "MarkWisely did not exit after the Linux close request."
+          echo "Window-manager close did not terminate MarkWisely under Xvfb; verifying SIGTERM shutdown."
+          kill -TERM "$pid" 2>/dev/null || true
+          for _ in $(seq 1 10); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              kill "$wm_pid" 2>/dev/null || true
+              trap - EXIT
+              exit 0
+            fi
+            sleep 1
+          done
+
+          ps -p "$pid" -o pid=,command= || true
+          echo "MarkWisely did not exit after SIGTERM."
           exit 1
           EOF
       - name: macOS bundle smoke
