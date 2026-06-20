@@ -172,13 +172,18 @@ jobs:
 
           window_id=""
           close_tool=""
+          wmctrl_windows=""
           for _ in $(seq 1 45); do
             if ! kill -0 "$pid" 2>/dev/null; then
               wait "$pid"
               echo "MarkWisely exited before a window was visible."
               exit 1
             fi
-            window_id="$(wmctrl -lp 2>/dev/null | awk -v pid="$pid" '$3 == pid { print $1; exit }')"
+            wmctrl_windows="$(wmctrl -lpx 2>/dev/null || true)"
+            window_id="$(printf '%s\n' "$wmctrl_windows" | awk -v pid="$pid" '$3 == pid { print $1; exit }')"
+            if [ -z "$window_id" ]; then
+              window_id="$(printf '%s\n' "$wmctrl_windows" | awk 'tolower($0) ~ /markwisely/ { print $1; exit }')"
+            fi
             if [ -n "$window_id" ]; then
               close_tool="wmctrl"
               break
@@ -191,8 +196,10 @@ jobs:
             sleep 1
           done
           test -n "$window_id"
+          printf '%s\n' "$wmctrl_windows"
 
           if [ "$close_tool" = "wmctrl" ]; then
+            wmctrl -ia "$window_id" || true
             wmctrl -ic "$window_id"
           else
             xdotool windowactivate "$window_id" || true
