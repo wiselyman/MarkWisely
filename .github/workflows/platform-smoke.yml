@@ -71,7 +71,7 @@ jobs:
           test_doc="$RUNNER_TEMP/markwisely-open-smoke.md"
           printf '# Association Smoke\n\nOpened from Launch Services.\n' > "$test_doc"
           test -d "$app_path"
-          open -n -a "$app_path" "$test_doc"
+          open -n -a "$PWD/$app_path" "$test_doc"
 
           pid=""
           for _ in $(seq 1 30); do
@@ -83,25 +83,18 @@ jobs:
           done
           test -n "$pid"
 
-          title=""
+          log_file="$HOME/Library/Logs/com.markwisely.desktop/MarkWisely.log"
+          opened=""
           for _ in $(seq 1 24); do
-            title="$(osascript <<'APPLESCRIPT' 2>/dev/null || true
-          tell application "System Events"
-            if exists process "MarkWisely" then
-              tell process "MarkWisely"
-                if (count of windows) > 0 then return name of window 1
-              end tell
-            end if
-          end tell
-          APPLESCRIPT
-          )"
-            if [ "$title" = "markwisely-open-smoke" ]; then
+            if [ -f "$log_file" ] && grep -q 'Opened markdown document: .*markwisely-open-smoke.md' "$log_file"; then
+              opened="yes"
               break
             fi
             sleep 1
           done
-          if [ "$title" != "markwisely-open-smoke" ]; then
-            echo "Expected Launch Services to open the Markdown document, got window title: ${title:-<empty>}"
+          if [ "$opened" != "yes" ]; then
+            echo "Expected Launch Services to open the Markdown document."
+            tail -n 120 "$log_file" || true
             exit 1
           fi
 

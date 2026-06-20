@@ -165,18 +165,20 @@ function App() {
       .then(({ getCurrentWindow }) => {
         const appWindow = getCurrentWindow();
         return appWindow.onCloseRequested(async (event) => {
-          if (closeInProgressRef.current || !isDirtyRef.current) {
+          if (closeInProgressRef.current) {
             return;
           }
 
           event.preventDefault();
-          const confirmed = await confirmWithNativeDialog('This document has unsaved changes. Close anyway?', {
-            title: 'Unsaved Changes',
-            okLabel: 'Discard',
-            cancelLabel: 'Cancel',
-          });
-          if (!confirmed) {
-            return;
+          if (isDirtyRef.current) {
+            const confirmed = await confirmWithNativeDialog('This document has unsaved changes. Close anyway?', {
+              title: 'Unsaved Changes',
+              okLabel: 'Discard',
+              cancelLabel: 'Cancel',
+            });
+            if (!confirmed) {
+              return;
+            }
           }
 
           closeInProgressRef.current = true;
@@ -216,6 +218,11 @@ function App() {
     });
     setRecentFiles((current) => updateRecentFiles(current, payload.path));
     setMessage(`Opened ${payload.name}`);
+    if ('__TAURI_INTERNALS__' in window) {
+      void import('@tauri-apps/plugin-log')
+        .then(({ info }) => info(`Opened markdown document: ${payload.path}`))
+        .catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {

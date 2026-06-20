@@ -53,6 +53,7 @@ pub fn collect_markdown_paths_from_args(args: Vec<String>, cwd: impl AsRef<Path>
     paths
 }
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub fn collect_markdown_paths_from_file_names(file_names: Vec<String>) -> Vec<String> {
     let mut paths = file_names
         .into_iter()
