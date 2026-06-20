@@ -2,6 +2,15 @@ name: Platform Installer Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/platform-smoke.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "src/**"
+      - "src-tauri/**"
 
 jobs:
   smoke:
@@ -48,12 +57,122 @@ jobs:
         if: startsWith(matrix.platform, 'ubuntu-')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm xvfb xdotool
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - name: Build installer bundles
         run: npm run tauri -- build ${{ matrix.build_args }}
+      - name: macOS launch and close smoke
+        if: startsWith(matrix.name, 'macos-')
+        run: |
+          set -euo pipefail
+          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/MarkWisely.app"
+          test -d "$app_path"
+          open -n "$app_path"
+
+          pid=""
+          for _ in $(seq 1 30); do
+            pid="$(pgrep -f 'MarkWisely.app/Contents/MacOS/markwisely' | head -n 1 || true)"
+            if [ -n "$pid" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test -n "$pid"
+
+          osascript -e 'tell application id "com.markwisely.desktop" to quit' || osascript -e 'tell application "MarkWisely" to quit'
+          for _ in $(seq 1 20); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          ps -p "$pid" -o pid=,command=
+          kill "$pid" || true
+          echo "MarkWisely did not exit after the macOS close request."
+          exit 1
+      - name: Windows launch and close smoke
+        if: startsWith(matrix.name, 'windows-')
+        shell: pwsh
+        run: |
+          $exe = "src-tauri/target/${{ matrix.target }}/release/markwisely.exe"
+          if (-not (Test-Path $exe)) {
+            throw "Missing MarkWisely executable at $exe"
+          }
+
+          $process = Start-Process -FilePath $exe -PassThru
+          try {
+            $hasWindow = $false
+            for ($i = 0; $i -lt 45; $i++) {
+              Start-Sleep -Seconds 1
+              $process.Refresh()
+              if ($process.HasExited) {
+                throw "MarkWisely exited before a main window was visible. Exit code: $($process.ExitCode)"
+              }
+              if ($process.MainWindowHandle -ne 0) {
+                $hasWindow = $true
+                break
+              }
+            }
+            if (-not $hasWindow) {
+              throw "MarkWisely did not create a main window on Windows."
+            }
+
+            if (-not $process.CloseMainWindow()) {
+              throw "CloseMainWindow returned false."
+            }
+            if (-not $process.WaitForExit(20000)) {
+              throw "MarkWisely did not exit after the Windows close request."
+            }
+          } finally {
+            $process.Refresh()
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+      - name: Linux launch and close smoke
+        if: startsWith(matrix.name, 'linux-')
+        run: |
+          set -euo pipefail
+          app_path="src-tauri/target/${{ matrix.target }}/release/markwisely"
+          test -x "$app_path"
+          APP_PATH="$app_path" xvfb-run -a bash <<'EOF'
+          set -euo pipefail
+          "$APP_PATH" &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+          window_id=""
+          for _ in $(seq 1 45); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              wait "$pid"
+              echo "MarkWisely exited before a window was visible."
+              exit 1
+            fi
+            window_id="$(xdotool search --pid "$pid" 2>/dev/null | head -n 1 || true)"
+            if [ -n "$window_id" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test -n "$window_id"
+
+          xdotool windowactivate "$window_id" || true
+          xdotool windowclose "$window_id"
+          for _ in $(seq 1 20); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              trap - EXIT
+              exit 0
+            fi
+            sleep 1
+          done
+
+          ps -p "$pid" -o pid=,command= || true
+          echo "MarkWisely did not exit after the Linux close request."
+          exit 1
+          EOF
       - name: macOS bundle smoke
         if: startsWith(matrix.name, 'macos-')
         run: |
@@ -78,7 +197,11 @@ jobs:
           test -n "$deb"
           test -n "$rpm"
           sudo apt-get install -y "./$deb"
-          command -v markwisely || find /usr -iname '*markwisely*' -print -quit
+          installed="$(command -v markwisely || true)"
+          if [ -z "$installed" ]; then
+            installed="$(find /usr -iname '*markwisely*' -type f -perm -111 -print -quit)"
+          fi
+          test -n "$installed"
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:

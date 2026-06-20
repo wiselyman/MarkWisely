@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import { FileText } from 'lucide-react';
 import { MarkdownEditor, type EditorCommand, type MarkdownEditorHandle } from './components/MarkdownEditor';
 import { FileTree } from './components/FileTree';
@@ -79,6 +79,8 @@ const editorCommands = new Set<string>([
 function App() {
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const externalChangeRef = useRef<string | null>(null);
+  const isDirtyRef = useRef(false);
+  const closeInProgressRef = useRef(false);
   const [doc, setDoc] = useState<DocumentState>(emptyDocument);
   const [tree, setTree] = useState<FileTreeNode | null>(null);
   const [recentFiles, setRecentFiles] = useState<string[]>(() => loadRecentFiles());
@@ -103,6 +105,10 @@ function App() {
   useEffect(() => {
     void installRuntimeLogging();
   }, []);
+
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
 
   useEffect(() => {
     window.document.documentElement.dataset.theme = resolvedTheme;
@@ -137,7 +143,7 @@ function App() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!isDirty) {
+      if (!isDirty || closeInProgressRef.current) {
         return;
       }
       event.preventDefault();
@@ -155,13 +161,31 @@ function App() {
     let disposed = false;
     let unlisten: (() => void) | null = null;
     void import('@tauri-apps/api/window')
-      .then(({ getCurrentWindow }) =>
-        getCurrentWindow().onCloseRequested((event) => {
-          if (isDirty && !window.confirm('This document has unsaved changes. Close anyway?')) {
-            event.preventDefault();
+      .then(({ getCurrentWindow }) => {
+        const appWindow = getCurrentWindow();
+        return appWindow.onCloseRequested(async (event) => {
+          if (closeInProgressRef.current || !isDirtyRef.current) {
+            return;
           }
-        }),
-      )
+
+          event.preventDefault();
+          const confirmed = await confirmWithNativeDialog('This document has unsaved changes. Close anyway?', {
+            title: 'Unsaved Changes',
+            okLabel: 'Discard',
+            cancelLabel: 'Cancel',
+          });
+          if (!confirmed) {
+            return;
+          }
+
+          closeInProgressRef.current = true;
+          try {
+            await appWindow.destroy();
+          } catch {
+            await appWindow.close().catch(() => undefined);
+          }
+        });
+      })
       .then((dispose) => {
         if (disposed) {
           dispose();
@@ -175,7 +199,7 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [isDirty]);
+  }, []);
 
   const updateMarkdown = useCallback((markdown: string) => {
     setDoc((current) => ({ ...current, markdown }));
@@ -226,7 +250,13 @@ function App() {
           return;
         }
 
-        if (window.confirm('This file changed on disk. Reload it?')) {
+        if (
+          await confirmWithNativeDialog('This file changed on disk. Reload it?', {
+            title: 'External Change',
+            okLabel: 'Reload',
+            cancelLabel: 'Keep Current',
+          })
+        ) {
           openPayload(await readDocument(path));
         } else {
           setDoc((current) => (current.path === path ? { ...current, metadata } : current));
@@ -252,15 +282,19 @@ function App() {
     };
   }, [doc.metadata?.hash, doc.metadata?.modifiedMs, doc.path, isDirty, openPayload]);
 
-  const confirmDiscardChanges = useCallback(() => {
-    if (!isDirty) {
+  const confirmDiscardChanges = useCallback(async () => {
+    if (!isDirtyRef.current) {
       return true;
     }
-    return window.confirm('This document has unsaved changes. Continue and discard them?');
-  }, [isDirty]);
+    return confirmWithNativeDialog('This document has unsaved changes. Continue and discard them?', {
+      title: 'Unsaved Changes',
+      okLabel: 'Discard',
+      cancelLabel: 'Cancel',
+    });
+  }, []);
 
-  const newDocument = useCallback(() => {
-    if (!confirmDiscardChanges()) {
+  const newDocument = useCallback(async () => {
+    if (!(await confirmDiscardChanges())) {
       return;
     }
     setDoc({ ...emptyDocument });
@@ -268,8 +302,8 @@ function App() {
     window.setTimeout(() => editorRef.current?.focus(), 40);
   }, [confirmDiscardChanges]);
 
-  const closeDocument = useCallback(() => {
-    if (!confirmDiscardChanges()) {
+  const closeDocument = useCallback(async () => {
+    if (!(await confirmDiscardChanges())) {
       return;
     }
     setDoc({ ...emptyDocument });
@@ -278,7 +312,7 @@ function App() {
 
   const openFilePath = useCallback(
     async (path: string) => {
-      if (!confirmDiscardChanges()) {
+      if (!(await confirmDiscardChanges())) {
         return;
       }
       try {
@@ -371,7 +405,14 @@ function App() {
       setMessage(`Saved ${metadata.name}`);
     } catch (error) {
       const message = formatError(error);
-      if (message.includes('changed on disk') && window.confirm(`${message}\n\nOverwrite the file on disk?`)) {
+      if (
+        message.includes('changed on disk') &&
+        (await confirmWithNativeDialog(`${message}\n\nOverwrite the file on disk?`, {
+          title: 'External Change',
+          okLabel: 'Overwrite',
+          cancelLabel: 'Cancel',
+        }))
+      ) {
         try {
           const metadata = await writeDocument(doc.path, doc.markdown, null, true);
           setDoc((current) => ({
@@ -964,6 +1005,26 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+async function confirmWithNativeDialog(
+  message: string,
+  options: { title: string; okLabel: string; cancelLabel: string },
+): Promise<boolean> {
+  if (!('__TAURI_INTERNALS__' in window)) {
+    return window.confirm(message);
+  }
+
+  try {
+    return await ask(message, {
+      title: options.title,
+      kind: 'warning',
+      okLabel: options.okLabel,
+      cancelLabel: options.cancelLabel,
+    });
+  } catch {
+    return false;
+  }
 }
 
 export default App;
