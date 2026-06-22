@@ -1515,9 +1515,12 @@ export const FrontMatterBlock = Node.create({
     name: 'frontMatterBlock',
     level: 'block',
     start: '---',
-    tokenize(src: string) {
+    tokenize(src: string, tokens?: unknown[]) {
+      if (tokens && tokens.length > 0) {
+        return undefined;
+      }
       const match = /^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?=\n|$)/.exec(src);
-      if (!match) {
+      if (!match || !looksLikeYamlFrontMatter(match[1])) {
         return undefined;
       }
       return {
@@ -1568,6 +1571,16 @@ export const FrontMatterBlock = Node.create({
     return ReactNodeViewRenderer(FrontMatterBlockView);
   },
 });
+
+function looksLikeYamlFrontMatter(source: string): boolean {
+  const lines = source.split(/\r?\n/).map((line) => line.trim());
+  const meaningfulLines = lines.filter((line) => line && !line.startsWith('#'));
+  if (meaningfulLines.length === 0) {
+    return false;
+  }
+
+  return meaningfulLines.some((line) => /^[A-Za-z_][\w.-]*\s*:/.test(line));
+}
 
 function FrontMatterBlockView() {
   return (

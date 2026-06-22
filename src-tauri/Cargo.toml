@@ -1,6 +1,6 @@
 [package]
 name = "markwisely"
-version = "0.1.1"
+version = "0.1.2"
 description = "MarkWisely desktop Markdown editor"
 authors = ["MarkWisely"]
 license = "MIT"

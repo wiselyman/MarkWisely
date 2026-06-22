@@ -47,6 +47,54 @@ describe('Tiptap Markdown round trip', () => {
     }
     editor.destroy();
   });
+
+  it('only treats document-leading YAML as front matter', () => {
+    const editor = createEditor('---\ntitle: Draft\nmarkwisely-copy-images-to: assets\n---\n\n# Body');
+
+    expect(editor.state.doc.firstChild?.type.name).toBe('frontMatterBlock');
+    editor.destroy();
+  });
+
+  it('keeps horizontal rules after content from swallowing the document', () => {
+    const markdown = [
+      '# 光伏清洁机器人卡机定位系统实施方案',
+      '',
+      '**基于 LoRaWAN + GIS 地图的机器人位置可视化与卡机告警**',
+      '',
+      '适用人员：项目经理 / 运维工程师 / 系统集成商',
+      '',
+      '---',
+      '',
+      '## 一、方案背景与目标',
+      '',
+      '### 1.1 问题描述',
+      '',
+      '光伏电站清洁机器人在运行过程中，偶发卡机故障。',
+      '',
+      '| 目标 | 说明 |',
+      '|------|------|',
+      '| 实时感知卡机 | 系统自动触发告警 |',
+      '',
+      '---',
+      '',
+      '## 二、系统架构',
+    ].join('\n');
+    const editor = createEditor(markdown);
+    const nodeTypes = collectNodeTypes(editor);
+
+    expect(nodeTypes).not.toContain('frontMatterBlock');
+    expect(nodeTypes).toContain('horizontalRule');
+    expect(nodeTypes).toContain('table');
+    expect(collectHeadings(editor)).toEqual(
+      expect.arrayContaining([
+        { level: 1, text: '光伏清洁机器人卡机定位系统实施方案' },
+        { level: 2, text: '一、方案背景与目标' },
+        { level: 3, text: '1.1 问题描述' },
+        { level: 2, text: '二、系统架构' },
+      ]),
+    );
+    editor.destroy();
+  });
 });
 
 function createEditor(markdown: string) {
@@ -70,4 +118,22 @@ function createEditor(markdown: string) {
     content: markdown,
     contentType: 'markdown',
   });
+}
+
+function collectNodeTypes(editor: Editor): string[] {
+  const nodeTypes: string[] = [];
+  editor.state.doc.descendants((node) => {
+    nodeTypes.push(node.type.name);
+  });
+  return nodeTypes;
+}
+
+function collectHeadings(editor: Editor): Array<{ level: number; text: string }> {
+  const headings: Array<{ level: number; text: string }> = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === 'heading') {
+      headings.push({ level: node.attrs.level, text: node.textContent });
+    }
+  });
+  return headings;
 }
