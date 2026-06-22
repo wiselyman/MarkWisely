@@ -2,6 +2,7 @@ import {
   Suspense,
   forwardRef,
   lazy,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -143,6 +144,10 @@ type MarkdownEditorProps = {
   onRelocateImage?: (imagePath: string, mode: 'copy' | 'move') => Promise<SavedAssetReference | null>;
 };
 
+const PROGRAMMATIC_UPDATE_GRACE_MS = 2500;
+const EDITING_KEYS = new Set(['Backspace', 'Delete', 'Enter', 'Tab']);
+const EDITING_SHORTCUT_KEYS = new Set(['b', 'i', 'u', 'k', 'x', 'v', 'z', 'y', '`']);
+
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor({
   markdown,
   mode,
@@ -157,6 +162,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   onRelocateImage,
 }: MarkdownEditorProps, ref) {
   const readyForUserUpdates = useRef(false);
+  const programmaticUpdateGraceUntil = useRef(Date.now() + PROGRAMMATIC_UPDATE_GRACE_MS);
+  const userEditIntent = useRef(false);
   const sourceView = useRef<any>(null);
   const editorForEvents = useRef<Editor | null>(null);
   const typewriterModeRef = useRef(typewriterMode);
@@ -166,6 +173,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const [linkPopover, setLinkPopover] = useState<LinkPopoverState | null>(null);
   const [imagePopover, setImagePopover] = useState<ImagePopoverState | null>(null);
   const [inlineSourcePopover, setInlineSourcePopover] = useState<InlineSourcePopoverState | null>(null);
+  const markUserEditIntent = useCallback(() => {
+    userEditIntent.current = true;
+  }, []);
+  const suppressProgrammaticUpdates = useCallback((durationMs = PROGRAMMATIC_UPDATE_GRACE_MS) => {
+    programmaticUpdateGraceUntil.current = Date.now() + durationMs;
+    userEditIntent.current = false;
+  }, []);
+  const canPublishEditorUpdate = useCallback(() => {
+    if (userEditIntent.current) {
+      userEditIntent.current = false;
+      return true;
+    }
+    return Date.now() >= programmaticUpdateGraceUntil.current;
+  }, []);
   const extensions = useMemo(
     () => [
       StarterKit.configure({
@@ -207,6 +228,24 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         spellcheck: 'true',
       },
       handleDOMEvents: {
+        beforeinput: () => {
+          markUserEditIntent();
+          return false;
+        },
+        keydown: (_view, event) => {
+          if (isEditingKeyboardEvent(event)) {
+            markUserEditIntent();
+          }
+          return false;
+        },
+        paste: () => {
+          markUserEditIntent();
+          return false;
+        },
+        drop: () => {
+          markUserEditIntent();
+          return false;
+        },
         click: (view, event) => {
           if (!showSyntaxOnFocusRef.current) {
             return false;
@@ -289,17 +328,24 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       if (!readyForUserUpdates.current) {
         return;
       }
+      if (!canPublishEditorUpdate()) {
+        return;
+      }
       const nextMarkdown = (editor as EditorWithMarkdown).getMarkdown();
       queueMicrotask(() => onChange(nextMarkdown));
     },
   });
 
   useEffect(() => {
-    readyForUserUpdates.current = true;
+    suppressProgrammaticUpdates();
+    const timer = window.setTimeout(() => {
+      readyForUserUpdates.current = true;
+    }, 0);
     return () => {
+      window.clearTimeout(timer);
       readyForUserUpdates.current = false;
     };
-  }, []);
+  }, [suppressProgrammaticUpdates]);
 
   useEffect(() => {
     editorForEvents.current = editor;
@@ -312,7 +358,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   useEffect(() => {
     showSyntaxOnFocusRef.current = showSyntaxOnFocus;
     if (!showSyntaxOnFocus && editor) {
-      clearActiveInlineSyntax(editor.view.dom);
+      const root = getEditorRoot(editor);
+      if (root) {
+        clearActiveInlineSyntax(root);
+      }
       setInlineSourcePopover(null);
     }
   }, [editor, showSyntaxOnFocus]);
@@ -336,12 +385,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     const syncActiveBlock = () => {
       window.requestAnimationFrame(() => {
+        const root = getEditorRoot(editor);
+        if (!root) {
+          return;
+        }
         markActiveBlock(editor);
         if (showSyntaxOnFocusRef.current) {
           markActiveInlineSyntax(editor);
           setInlineSourcePopover(buildInlineSourcePopover(editor));
         } else {
-          clearActiveInlineSyntax(editor.view.dom);
+          clearActiveInlineSyntax(root);
           setInlineSourcePopover(null);
         }
         setTableControlsVisible(editor.isActive('table'));
@@ -368,9 +421,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     }
     const current = (editor as EditorWithMarkdown).getMarkdown();
     if (current !== markdown) {
+      suppressProgrammaticUpdates();
       editor.commands.setContent(markdown, { contentType: 'markdown', emitUpdate: false });
     }
-  }, [editor, markdown, mode]);
+  }, [editor, markdown, mode, suppressProgrammaticUpdates]);
 
   useEffect(() => {
     if (!editor || mode !== 'wysiwyg') {
@@ -425,6 +479,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   );
 
   const insertMarkdown = (value: string) => {
+    markUserEditIntent();
     if (mode === 'source') {
       insertIntoSource(value);
       return;
@@ -442,6 +497,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     const chain = editor.chain().focus();
     if (command.startsWith('format-heading-')) {
+      markUserEditIntent();
       const level = Number(command.replace('format-heading-', '')) as 1 | 2 | 3 | 4 | 5 | 6;
       return chain.toggleHeading({ level }).run();
     }
@@ -450,76 +506,107 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       case 'focus-editor':
         return editor.commands.focus();
       case 'format-paragraph':
+        markUserEditIntent();
         return chain.setParagraph().run();
       case 'format-bullet-list':
+        markUserEditIntent();
         return chain.toggleBulletList().run();
       case 'format-ordered-list':
+        markUserEditIntent();
         return chain.toggleOrderedList().run();
       case 'format-task-list':
+        markUserEditIntent();
         return chain.toggleTaskList().run();
       case 'format-blockquote':
+        markUserEditIntent();
         return chain.toggleBlockquote().run();
       case 'format-code-block':
+        markUserEditIntent();
         return chain.toggleCodeBlock().run();
       case 'toggle-bold':
+        markUserEditIntent();
         return chain.toggleBold().run();
       case 'toggle-italic':
+        markUserEditIntent();
         return chain.toggleItalic().run();
       case 'toggle-strike':
+        markUserEditIntent();
         return chain.toggleStrike().run();
       case 'toggle-inline-code':
+        markUserEditIntent();
         return chain.toggleCode().run();
       case 'clear-format':
+        markUserEditIntent();
         return chain.unsetAllMarks().clearNodes().run();
       case 'insert-link': {
         if (!payload) {
           return showLinkPopoverForSelection();
         }
+        markUserEditIntent();
         return chain.extendMarkRange('link').setLink({ href: payload }).run();
       }
       case 'insert-image': {
         if (!payload) {
           return showImagePopoverForInsertion();
         }
+        markUserEditIntent();
         return chain.setImage({ src: payload }).run();
       }
       case 'insert-table':
+        markUserEditIntent();
         return chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
       case 'table-add-row-before':
+        markUserEditIntent();
         return chain.addRowBefore().run();
       case 'table-add-row':
+        markUserEditIntent();
         return chain.addRowAfter().run();
       case 'table-add-column-before':
+        markUserEditIntent();
         return chain.addColumnBefore().run();
       case 'table-delete-row':
+        markUserEditIntent();
         return chain.deleteRow().run();
       case 'table-add-column':
+        markUserEditIntent();
         return chain.addColumnAfter().run();
       case 'table-delete-column':
+        markUserEditIntent();
         return chain.deleteColumn().run();
       case 'table-align-left':
+        markUserEditIntent();
         return chain.setCellAttribute('align', 'left').run();
       case 'table-align-center':
+        markUserEditIntent();
         return chain.setCellAttribute('align', 'center').run();
       case 'table-align-right':
+        markUserEditIntent();
         return chain.setCellAttribute('align', 'right').run();
       case 'table-merge-split':
+        markUserEditIntent();
         return chain.mergeOrSplit().run();
       case 'table-toggle-header-row':
+        markUserEditIntent();
         return chain.toggleHeaderRow().run();
       case 'table-toggle-header-column':
+        markUserEditIntent();
         return chain.toggleHeaderColumn().run();
       case 'table-delete':
+        markUserEditIntent();
         return chain.deleteTable().run();
       case 'insert-horizontal-rule':
+        markUserEditIntent();
         return chain.setHorizontalRule().run();
       case 'insert-toc':
+        markUserEditIntent();
         return chain.insertContent({ type: 'tocBlock' }).run();
       case 'insert-inline-math': {
+        markUserEditIntent();
         const source = payload?.trim() || 'x^2';
         return chain.insertContent({ type: 'inlineMath', attrs: { source } }).run();
       }
       case 'insert-math-block':
+        markUserEditIntent();
         return chain
           .insertContent({
             type: 'mathBlock',
@@ -527,6 +614,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           })
           .run();
       case 'insert-mermaid-block':
+        markUserEditIntent();
         return chain
           .insertContent({
             type: 'codeBlock',
@@ -695,6 +783,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     if (!editor || !linkPopover) {
       return;
     }
+    markUserEditIntent();
     const next = href.trim();
     const { from, to } = linkPopover;
     if (!next) {
@@ -724,6 +813,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     if (!editor || !linkPopover) {
       return;
     }
+    markUserEditIntent();
     editor
       .chain()
       .focus()
@@ -738,6 +828,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     if (!editor || !imagePopover) {
       return;
     }
+    markUserEditIntent();
     const nextSrc = src.trim();
     const imageAttrs = {
       src: nextSrc,
@@ -766,6 +857,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       setImagePopover(null);
       return;
     }
+    markUserEditIntent();
     try {
       editor.view.dispatch(editor.view.state.tr.setSelection(NodeSelection.create(editor.view.state.doc, imagePopover.pos)));
       editor.chain().focus().deleteSelection().run();
@@ -789,6 +881,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     if (!editor || !inlineSourcePopover) {
       return;
     }
+    markUserEditIntent();
     editor
       .chain()
       .focus()
@@ -803,6 +896,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     if (imageFiles.length === 0) {
       return;
     }
+    markUserEditIntent();
     event.preventDefault();
     await insertImageFiles(imageFiles);
   };
@@ -812,6 +906,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     if (imageFiles.length === 0) {
       return;
     }
+    markUserEditIntent();
     event.preventDefault();
     await insertImageFiles(imageFiles);
   };
@@ -831,11 +926,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   };
 
   const revealInlineSyntaxFromPointer = (target: EventTarget | null) => {
-    if (!showSyntaxOnFocusRef.current || !editor || !(target instanceof HTMLElement) || !editor.view.dom.contains(target)) {
+    const root = editor ? getEditorRoot(editor) : null;
+    if (!showSyntaxOnFocusRef.current || !editor || !root || !(target instanceof HTMLElement) || !root.contains(target)) {
       return;
     }
-    clearActiveInlineSyntax(editor.view.dom);
-    markInlineSyntaxFromElement(editor.view.dom, target);
+    clearActiveInlineSyntax(root);
+    markInlineSyntaxFromElement(root, target);
   };
 
   return (
@@ -864,7 +960,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           data-focus-mode={focusMode ? 'true' : 'false'}
           data-theme={theme}
           onMouseMove={(event) => revealInlineSyntaxFromPointer(event.target)}
-          onMouseLeave={() => editor && clearActiveInlineSyntax(editor.view.dom)}
+          onMouseLeave={() => {
+            const root = editor ? getEditorRoot(editor) : null;
+            if (root) {
+              clearActiveInlineSyntax(root);
+            }
+          }}
         >
           <EditorContent editor={editor} />
           {tableControlsVisible && (
@@ -941,6 +1042,23 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     </section>
   );
 });
+
+function isEditingKeyboardEvent(event: KeyboardEvent): boolean {
+  if (event.isComposing) {
+    return true;
+  }
+  if (EDITING_KEYS.has(event.key)) {
+    return true;
+  }
+  if (!event.metaKey && !event.ctrlKey && event.key.length === 1) {
+    return true;
+  }
+  if (event.metaKey || event.ctrlKey) {
+    const key = event.key.toLowerCase();
+    return EDITING_SHORTCUT_KEYS.has(key) || /^[1-6]$/.test(key);
+  }
+  return false;
+}
 
 function LinkEditPopover({
   state,
@@ -2232,7 +2350,8 @@ function getActiveTableCellAlign(editor: Editor): 'left' | 'center' | 'right' | 
 }
 
 function buildInlineSourcePopover(editor: Editor): InlineSourcePopoverState | null {
-  if (!editor.view.hasFocus() || !editor.state.selection.empty) {
+  const root = getEditorRoot(editor);
+  if (!root || !editor.view.hasFocus() || !editor.state.selection.empty) {
     return null;
   }
 
@@ -2303,7 +2422,10 @@ function wrapInlineMarkdownSource(markNames: InlineSourceMarkName[], text: strin
 }
 
 function markActiveBlock(editor: Editor) {
-  const root = editor.view.dom;
+  const root = getEditorRoot(editor);
+  if (!root) {
+    return;
+  }
   root.querySelectorAll('.markwisely-active-block').forEach((node) => node.classList.remove('markwisely-active-block'));
 
   let domNode: globalThis.Node | null = null;
@@ -2324,22 +2446,29 @@ function scheduleActiveSyntaxRefresh(editor: Editor | null, fallbackElement?: HT
   }
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
+      const root = getEditorRoot(editor);
+      if (!root) {
+        return;
+      }
       markActiveBlock(editor);
       markActiveInlineSyntax(editor);
       if (
         fallbackElement &&
-        editor.view.dom.querySelectorAll(
+        root.querySelectorAll(
           '.markwisely-active-bold, .markwisely-active-italic, .markwisely-active-strike, .markwisely-active-code, .markwisely-active-link',
         ).length === 0
       ) {
-        markInlineSyntaxFromElement(editor.view.dom, fallbackElement);
+        markInlineSyntaxFromElement(root, fallbackElement);
       }
     });
   });
 }
 
 function markActiveInlineSyntax(editor: Editor) {
-  const root = editor.view.dom;
+  const root = getEditorRoot(editor);
+  if (!root) {
+    return;
+  }
   clearActiveInlineSyntax(root);
 
   let domNode: globalThis.Node | null = null;
@@ -2499,7 +2628,10 @@ function hasEquivalentMark(marks: readonly any[], activeMark: any): boolean {
 }
 
 function findInlineElementForRange(editor: Editor, selector: string, from: number, to: number): HTMLElement | null {
-  const root = editor.view.dom;
+  const root = getEditorRoot(editor);
+  if (!root) {
+    return null;
+  }
   const positions = [from + 1, from, Math.max(from, to - 1), editor.state.selection.from].filter(
     (pos) => pos >= 0 && pos <= editor.state.doc.content.size,
   );
@@ -2528,8 +2660,12 @@ function getDirectEditorChild(element: HTMLElement, root: HTMLElement): HTMLElem
 }
 
 function scrollActiveBlockToCenter(editor: Editor) {
-  const active = editor.view.dom.querySelector('.markwisely-active-block') as HTMLElement | null;
-  const scroller = editor.view.dom.closest('.wysiwyg-scroll') as HTMLElement | null;
+  const root = getEditorRoot(editor);
+  if (!root) {
+    return;
+  }
+  const active = root.querySelector('.markwisely-active-block') as HTMLElement | null;
+  const scroller = root.closest('.wysiwyg-scroll') as HTMLElement | null;
   if (!active || !scroller) {
     return;
   }
@@ -2537,4 +2673,12 @@ function scrollActiveBlockToCenter(editor: Editor) {
   const activeCenter = active.offsetTop + active.offsetHeight / 2;
   const targetTop = Math.max(0, activeCenter - scroller.clientHeight * 0.48);
   scroller.scrollTo({ top: targetTop, behavior: 'smooth' });
+}
+
+function getEditorRoot(editor: Editor): HTMLElement | null {
+  try {
+    return editor.view.dom;
+  } catch {
+    return null;
+  }
 }

@@ -7,3 +7,7 @@ class ResizeObserverMock {
 }
 
 globalThis.ResizeObserver = ResizeObserverMock;
+
+if (!document.elementFromPoint) {
+  document.elementFromPoint = () => document.body;
+}
